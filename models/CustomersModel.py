@@ -1,6 +1,7 @@
 from typing import Optional, List
 from pydantic import ConfigDict, BaseModel, Field, EmailStr
 from data.validators.validator import PyObjectId
+import datetime
 
 # Model for customers
 class CustomerModel(BaseModel):
@@ -16,6 +17,7 @@ class CustomerModel(BaseModel):
     otp_verified : Optional[bool] = False
     password : Optional[str] = None
     otp_log : Optional[dict] = None
+    date_updated : Optional[datetime.datetime] = None
 
 
 # Collection for customers
