@@ -1,4 +1,4 @@
-from database import customer_collection, transaction_collection
+from database import customer_collection, transaction_collection, review_collection
 from entities import GeneralEntities
 from app import db
 
@@ -17,7 +17,7 @@ class Review:
 
         verified = False
 
-        self.customer = customer_collection.find_one(
+        self.customer = await customer_collection.find_one(
             filter={"phone" : customer_phone}
         )
 
@@ -25,7 +25,7 @@ class Review:
         if self.customer != None:
 
             # get transaction
-            transaction = transaction_collection.find_one(
+            transaction = await transaction_collection.find_one(
                 filter={
                     "customer" : self.customer['_id'],
                     "itemid" : foodid
@@ -44,7 +44,7 @@ class Review:
         
         verified = False
 
-        self.customer = customer_collection.find_one(
+        self.customer = await customer_collection.find_one(
             filter={"phone" : customer_phone}
         )
 
@@ -52,7 +52,7 @@ class Review:
         if self.customer != None:
 
             # get transaction
-            transaction = transaction_collection.find_one(
+            transaction = await transaction_collection.find_one(
                 filter={
                     "customer" : self.customer['_id'],
                     "seller" : sellerid
@@ -111,3 +111,59 @@ class Review:
             },
             upsert=True
         )
+
+    # this unpacks a customer review
+    def unpackCustomerReview(self, review : dict):
+        return {
+            "id" : str(review['_id']),
+            "customer_name" : str(review['customer']['name']).capitalize(),
+            "rating" : int(review['rating']),
+            "title" : str(review['review_title']).capitalize(),
+            "review" : str(review['review']),
+            "verified" : review['verified_purchase'],
+            "helpful" : review['helpful'],
+            "date" : review['date_created']
+        }
+    
+    # get all reviews by id
+    async def getReviewsByID(self, typeid : str):
+
+        reviews = await review_collection.find(
+            filter={"typeid" : typeid}
+        ).to_list(100000000)
+
+        total_reviews = len(reviews)
+        rating = 0
+        customer_reviews = []
+        stars = {"5" : 0, "4" : 0, "3" : 0, "2" : 0, "1" : 0}
+
+        if total_reviews > 0:
+
+            for review in reviews:
+                customer_reviews.append(self.unpackCustomerReview(review))
+                rating += review['rating']
+                stars[str(review['rating'])] += 1
+
+            # adjust rating
+            rating = round(rating / total_reviews)
+
+        # read stars
+        for starIndex in stars:
+            star = stars[str(starIndex)]
+            percentage = '0%'
+
+            if total_reviews > 0:
+                percentage = '0%' if star == 0 else (str(round((star*100)/total_reviews)) + '%')
+
+            # update stars
+            stars[str(starIndex)] = percentage
+
+        # all good
+        return {
+            "total_reviews" : total_reviews,
+            "rating" : rating,
+            "customer_reviews" : customer_reviews,
+            "stars" : stars
+        }
+
+    ...

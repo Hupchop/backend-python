@@ -1,5 +1,6 @@
 import uvicorn
-from typing import Union
+import random
+from typing import Union, List, Dict
 import os
 from fastapi import FastAPI, Body, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -7,12 +8,13 @@ from app import db, client, success, failed, format_number
 from fastapi.responses import JSONResponse
 from bson import ObjectId
 from classes.Reviews import Review
+from interfaces import TransactionInterface
 # from controllers import CustomersController
 from models import CustomersModel, TransactionSummaryModel, TransactionsModel
-from classes import Transaction, Messaging
+from classes import Transaction, Messaging, Images
 
 # import database
-from database import customer_collection, transaction_summary_collection, transaction_collection, review_collection
+from database import customer_collection, transaction_summary_collection, transaction_collection, review_collection, inspiration_collection, suggestion_collection
 
 import hashlib
 import datetime
@@ -141,7 +143,8 @@ async def saveWalletTransction(body : WalletTransactionEntity = Body(...)):
             subTotal=float(body.amount),
             channel=body.channel,
             method=body.channel,
-            total=float(body.amount)
+            total=float(body.amount),
+            tracking_number="WALLET"
         )
 
         # create record
@@ -292,7 +295,7 @@ async def generatePaymentLink(body : GeneratePaymentLinkEntity = Body(...)):
 @app.post('/verify/payment/', status_code=status.HTTP_200_OK)
 async def verifyPayment(body : VerifyPaymentEntity = Body(...)):
 
-    transaction = await transaction_summary_collection.find_one({"reference" : body.paymentReference})
+    transaction = await transaction_summary_collection.find_one({"reference" : body.reference})
 
     if transaction == None or (isinstance(transaction, dict) and transaction["transaction_reference"] == ''):
         return JSONResponse(
@@ -323,50 +326,57 @@ async def verifyPayment(body : VerifyPaymentEntity = Body(...)):
         # paid?
         if amountPaid > 0:
             
-            paymentStatus = str(response['responseBody']['paymentStatus']).lower()
+            paymentStatus = str(response['responseBody']['paymentStatus'])
 
             # get all transaction ids
             ids = list()
 
             # get message
-            message = ""
+            message = "Payment verified with status"
 
             # get payable
             payable = float(response['responseBody']['totalPayable'])
 
             # check payment status
-            if str(response['responseBody']['paymentStatus']).upper == constants.PAID :
+            if paymentStatus.lower() == constants.PAID.lower() :
 
                 # get amount settled
                 settlementAmount = float(response['responseBody']['settlementAmount'])
                 app_fee = amountPaid - settlementAmount
                 amount_settled = settlementAmount
-                processor = 'monnify'
+                processor : str = 'monnify'
+
+                requestObject = TransactionInterface.TransactionInterface()
+                
+                requestObject.app_fee=app_fee
+                requestObject.amount_settled=float(amount_settled)
+                requestObject.reference=body.reference
+                requestObject.processor=processor
 
                 # post transaction
-                await Transaction.TransactionSuccessful(
-                    app_fee=app_fee,
-                    amount_settled=amount_settled,
-                    reference=body.paymentReference,
-                    processor=processor
-                ).Save()
+                message = await Transaction.TransactionSuccessful().Save(request=requestObject)
 
 
-            transactions = await transaction_collection.find({"reference" : body.paymentReference}).to_list(1000)
+            transactions = await transaction_collection.find({"reference" : body.reference}).to_list(1000)
 
             if len(transactions) > 0:
                 for row in transactions:
                     ids.append(row['itemid'])
 
             return {
-                "message" : "Payment verified with status",
                 "payment_status" : 'success',
                 "message" : message,
                 "ids" : ids
             }
 
         else:
-            ...
+
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content={
+                    "message" : "Payment canceled or not successful"
+                }
+            )
 
     else:
 
@@ -411,16 +421,19 @@ async def submitReview(body : GeneralEntities.SubmitReviewEntity = Body(...)):
         )
     
     # continue
-    foodId, sellerId = body.id
+    foodId = body.id
+    sellerId = body.id
+
+    reviewClass = Review()
 
     # manage option
     if body.review_type.lower() == 'food' :
-        verifiedPurchase = await Review.verifiedFoodPurchase(
+        verifiedPurchase = await reviewClass.verifiedFoodPurchase(
             customer_phone=body.customer_phone,
             foodid=body.id
         )
     else:
-        verifiedPurchase = await Review.verifiedRestaurantPurchase(
+        verifiedPurchase = await reviewClass.verifiedRestaurantPurchase(
             customer_phone=body.customer_phone,
             sellerid=body.id
         )
@@ -433,7 +446,7 @@ async def submitReview(body : GeneralEntities.SubmitReviewEntity = Body(...)):
             "customer" : {
                 "phone" : body.customer_phone,
                 "name" : body.customer_name,
-                "id" : Review.customer['_id']
+                "id" : reviewClass.customer['_id']
             },
             "experience" : Review.getExperience(body.rating),
             "rating" : body.rating,
@@ -447,7 +460,7 @@ async def submitReview(body : GeneralEntities.SubmitReviewEntity = Body(...)):
     )
 
     # update review count
-    await Review.updateReviewCount(data=body)
+    await reviewClass.updateReviewCount(data=body)
 
     return {
         "status" : True,
@@ -520,5 +533,268 @@ async def reviewWasAbusive(body : GeneralEntities.UpdateReviewActivity = Body(..
         "message" : "This review has been reported abusive!"
     }
 
+
+# create transaction
+@app.post("/transaction/create", status_code=status.HTTP_200_OK)
+async def createTransaction(body : GeneralEntities.CreateTransactionEntity = Body(...)):
+    referenceName = str(datetime.datetime.now()) + "_payment_reference_purchase"
+    reference = hashlib.md5(referenceName.encode()).hexdigest()
+
+    # format phone
+    phoneFormatted = format_number(body.phone)
+
+    # get customer
+    customer = await customer_collection.find_one(
+        filter={"phone" : phoneFormatted['phone']}
+    )
+
+    # generate tracking number
+    tracking_number = await libs.generateTrackingNumber(reference=reference)
+
+    # new array
+    newArray = []
+
+    # add reference
+    for row in body.data:
+        row.reference = reference
+        row.status = constants.PENDING_PAYMENT
+        row.seller = body.seller if row.seller == None else row.seller
+        row.customer = customer['_id']
+        newArray.append(row.model_dump(by_alias=True, warnings=False))
+
+    # insert transactions
+    await transaction_collection.insert_many(documents=newArray)
+
+    # set total
+    total = float(body.subTotal) + float(body.delivery) + float(body.processingFee)
+
+    # check processing fee
+    if body.processingFee > 100:
+        body.processingFee = 100
+
+    # create transaction summary
+    await transaction_summary_collection.insert_one(
+        document={
+            "reference" : reference,
+            "customer" : customer['_id'],
+            "subTotal" : body.subTotal,
+            "delivery" : body.delivery,
+            "processingFee" : body.processingFee,
+            "tracking_number" : tracking_number, 
+            "total" : total,
+            "status" : constants.NOT_PAID,
+            "items" : len(newArray),
+            "channel" : body.channel,
+            "method" : body.method,
+            "note" : body.order_note,
+            "delivery_info" : body.delivery_info,
+            "date_created" : datetime.datetime.now()
+        }
+    )
+
+    # all good
+    return {
+        "message" : 'Transaction recorded, reference generated',
+        "reference" : reference,
+        "customer" : str(customer['_id']),
+        "paying" : total
+    }
+
+
+# Place order from wallet
+@app.post("/wallet/place-order", status_code=status.HTTP_200_OK)
+async def makeOrderFromWallet(body : GeneralEntities.PlaceOrderFromWalletEntity = Body(...)):
+
+    transaction = await transaction_summary_collection.find_one(
+        filter={"reference" : body.reference}
+    )
+
+    settlementAmount = float(transaction['total'])
+    app_fee = settlementAmount - transaction['subTotal']
+    amount_settled = settlementAmount
+    processor : str = 'wallet'
+
+    requestObject = TransactionInterface.TransactionInterface()
+    
+    requestObject.app_fee=app_fee
+    requestObject.amount_settled=float(amount_settled)
+    requestObject.reference=body.reference
+    requestObject.processor=processor
+
+    # post transaction
+    message = await Transaction.TransactionSuccessful().Save(request=requestObject)
+
+    # debit customer wallet
+    customer = await customer_collection.find_one(
+        filter={"_id" : transaction['customer']}
+    )
+
+    # update wallet
+    walletNewBalance = customer['wallet'] - float(transaction['total'])
+
+    # update wallet balance
+    customer_collection.update_one(
+        filter={"_id" : customer['_id']},
+        update={"$set" : {
+            "wallet" : walletNewBalance,
+            "date_updated" : datetime.datetime.now()
+        }}
+    )
+
+    transactions = await transaction_collection.find({"reference" : body.reference}).to_list(1000)
+
+    ids = []
+
+    if len(transactions) > 0:
+        for row in transactions:
+            ids.append(row['itemid'])
+
+    return {
+        "payment_status" : 'success',
+        "message" : message,
+        "ids" : ids
+    }
+
+
+# get all resturant types
+@app.get('/restaurant/types', status_code=status.HTTP_200_OK)
+async def getRestaurantTypes():
+    restaurant_types = db.get_collection('restaurant_types')
+
+    # load types
+    types : List[dict] = []
+
+    # get all records
+    records = await restaurant_types.find().to_list(1000)
+
+    # load imageid
+    imageIds = []
+
+    # load records
+    if len(records) > 0:
+
+        # get all image ids
+        for row in records:
+            imageIds.append(ObjectId(row['image_id']))
+
+        # load image class
+        images = Images.Images(dataIds=imageIds)
+        await images.loadImages()
+
+        # load images
+        for result in records:
+            result['image'] = await images.loadImage(result['image_id'])
+            del result['image_id']
+            del result['_id']
+            types.append(result)
+
+    return {
+        "message" : "Showing all restaurant types",
+        "data" : types,
+        "status" : True
+    }
+
+
+@app.get('/food-inspiration/all', status_code=status.HTTP_200_OK)
+async def getAllFoodInspiration():
+    records = await inspiration_collection.find().to_list(1000)
+
+    if len(records) == 0:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={
+                "message" : 'No food inspiration to show',
+                "data" : []
+            }
+        )
+    
+    # proceed
+    dataIds = []
+
+    # load dataid
+    for result in records:
+        dataIds.append(result['image'])
+
+
+    # load image class
+    images = Images.Images(dataIds=dataIds)
+    await images.loadImages()
+
+    inspirations = []
+
+    # load images
+    for result in records:
+        result['image'] = await images.loadImage(result['image'])
+        result['id'] = str(result['_id'])
+        del result['_id']
+        inspirations.append(result)
+
+    # shuffle
+    random.shuffle(inspirations)
+
+    return {
+        "status" : True,
+        "data" : inspirations,
+        "message" : "Showing all food inspiration"
+    }
+
+
+# Gets vendor reviews
+@app.get('/reviews/{id}', status_code=status.HTTP_200_OK)
+async def getReviewsById(id : str):
+
+    reviews = await Review().getReviewsByID(typeid=id)
+
+    return {
+        "status" : True,
+        "message" : "Showing all reviews",
+        "data" : reviews
+    }
+
+# submits a restaurant suggestion
+@app.post('/suggest/restaurant', status_code=status.HTTP_200_OK)
+async def suggestRestaurant(body : GeneralEntities.SuggestRestaurantEntity = Body(...)):
+
+    await suggestion_collection.insert_one(
+        document={
+            "account" : "restaurant",
+            "about" : body.about_vendor,
+            "vendor" : {
+                "name" : body.vendor_name,
+                "address" : body.vendor_contact_address,
+                "phone" : body.vendor_contact_number
+            },
+            "date_created" : datetime.datetime.now()
+        }
+    )
+    
+    return {
+        "status" : True,
+        "message" : "Your suggestion has been submitted successfully"
+    }
+
+
+# submits a food suggestion
+@app.post('/suggest/food', status_code=status.HTTP_200_OK)
+async def suggestFood(body : GeneralEntities.SuggestFoodEntity = Body(...)):
+    
+    await suggestion_collection.insert_one(
+        document={
+            "account" : "food",
+            "food" : body.food,
+            "about" : body.about_food,
+            "vendor" : {
+                "name" : body.vendor_name,
+                "address" : body.vendor_contact_address,
+                "phone" : body.vendor_contact_number
+            },
+            "date_created" : datetime.datetime.now()
+        }
+    )
+    
+    return {
+        "status" : True,
+        "message" : "Your suggestion has been submitted successfully"
+    }
 
 ...

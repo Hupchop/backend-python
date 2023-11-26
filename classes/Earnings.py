@@ -28,7 +28,7 @@ class CreditHupchop():
         )
 
         # credit preccessor
-        await CreditProcessor.Save()
+        await CreditProcessor().Save(transaction=transaction)
 
 
 # This credits the global vendor balance
@@ -39,7 +39,7 @@ class CreditVendor():
         delivery = transaction.delivery
 
         # credit global vendor account
-        globalVendor = earnings_collection.find_one({
+        globalVendor = await earnings_collection.find_one({
             "account" : "global_vendor"
         })
 
@@ -71,6 +71,15 @@ class CreditProcessor():
 
     async def Save(self, transaction : TransactionInterface):
         earnings = await earnings_collection.find_one({"account" : transaction.processor})
+
+        if earnings == None:
+            await earnings_collection.insert_one(
+                document={
+                    "account" : transaction.processor,
+                    "earnings" : 0
+                }
+            )
+            return await self.Save(transaction=transaction)
 
         earning = transaction.app_fee
 

@@ -6,21 +6,21 @@ import libs
 # import database
 from database import transaction_summary_collection, transaction_collection
 
-class TransactionSuccessful(TransactionInterface):
+class TransactionSuccessful(TransactionInterface):        
 
     # Save transaction
-    async def Save(self):
+    async def Save(self, request : TransactionInterface):
 
         # get summary
         summary = await transaction_summary_collection.find_one({
-            "reference" : self.reference
+            "reference" : request.reference
         })
 
         if summary == None:
             return False
         
         # continue
-        self.platform_fee = float(summary['processingFee'])
+        request.platform_fee = float(summary['processingFee'])
 
         # check delivery
         if summary['delivery'] != 0:
@@ -36,37 +36,37 @@ class TransactionSuccessful(TransactionInterface):
             summary['delivery'] -= deliveryCommission;
 
             # set the new delivery fee
-            self.delivery = summary['delivery'];
+            request.delivery = summary['delivery'];
 
             # add to platform fee
-            self.platform_fee += deliveryCommission;
+            request.platform_fee += deliveryCommission;
 
             # set delivery commission
-            self.delivery_commision = deliveryCommission;
+            request.delivery_commision = deliveryCommission;
 
         # deduct platform fee
-        self.amount_settled -= self.platform_fee;
+        request.amount_settled -= request.platform_fee;
 
         # generate tracking number
-        self.trackingNumber = summary['tracking_number'] if summary['tracking_number'] != "" else libs.generateTrackingNumber(self.reference)
+        request.trackingNumber = summary['tracking_number'] if summary['tracking_number'] != "" else libs.generateTrackingNumber(request.reference)
 
         # update transaction summary
-        await transaction_summary_collection.find_one_and_update(
-            filter={"reference" : self.reference},
+        update = await transaction_summary_collection.update_one(
+            filter={"reference" : request.reference},
             update={"$set" : {
                 "delivery" : summary['delivery'],
-                "platform_fee" : self.platform_fee,
-                "payment_fee" : self.app_fee,
-                "settlement_to_vendor" : self.amount_settled,
+                "platform_fee" : request.platform_fee,
+                "payment_fee" : request.app_fee,
+                "settlement_to_vendor" : request.amount_settled,
                 "processingFee" : 0,
                 "status" : "success",
-                "tracking_number" : self.trackingNumber,
+                "tracking_number" : request.trackingNumber,
                 "date_updated" : datetime.datetime.now()
             }} 
         )
 
         # wallet funding?
-        if str(self.trackingNumber).upper() == 'WALLET':
+        if str(request.trackingNumber).upper() == 'WALLET':
             return await libs.creditCustomerWallet(summary['total'], summary['customer'])
         
         # status
@@ -74,26 +74,28 @@ class TransactionSuccessful(TransactionInterface):
 
         # update transactions with same ref
         await transaction_collection.update_many(
-            filter={"reference" : self.reference},
+            filter={"reference" : request.reference},
             update={"$set" : {
                 "status" : status
             }}
         )
 
-        # Credit hupchop
-        Earnings.CreditHupchop().Save(transaction=self)
+        if str(request.trackingNumber).upper() != 'WALLET':
 
-        # Credit vendor
-        Earnings.CreditVendor().Save(transaction=self)
+            # Credit hupchop
+            await Earnings.CreditHupchop().Save(transaction=request)
 
-        # send notification to customer
-        Orders.OrderPlacedCustomer().Save(transaction=self)
+            # Credit vendor
+            await Earnings.CreditVendor().Save(transaction=request)
 
-        # send notification to vendor
-        Orders.OrderPlacedVendor().Save(transaction=self)
+            # send notification to customer
+            await Orders.OrderPlacedCustomer().Save(transaction=request)
+
+            # send notification to vendor
+            await Orders.OrderPlacedVendor().Save(transaction=request)
 
         # All good
-        return "Your order has been placed with the tracking number " + self.trackingNumber +". You will be contacted shortly. Please take note of the tracking number."
+        return "Your order has been placed with the tracking number " + request.trackingNumber +". You will be contacted shortly. Please take note of the tracking number."
     
 
 
