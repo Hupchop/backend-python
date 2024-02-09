@@ -162,7 +162,7 @@ class Review:
         return {
             "total_reviews" : total_reviews,
             "rating" : rating,
-            "customer_reviews" : customer_reviews,
+            "reviews" : customer_reviews,
             "stars" : stars
         }
 
