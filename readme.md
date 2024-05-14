@@ -3,10 +3,10 @@ Framework : FastApi
 Author : Amadi Ifeanyi
 
 ## Installation
-Simply run ```pip install -r requirements.txt``` to install.
+Simply run ```docker build -t myimage .``` to install.
 
 ## Serving Locally
-Simply run ```python3 main.py``` to start development server
+Simply run ```docker run -d --name mycontainer -p 80:80 myimage``` to start development server
 
 ## Books
 FastAPI [https://www.tutorialspoint.com/fastapi/fastapi_tutorial.pdf]

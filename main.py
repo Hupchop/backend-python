@@ -47,7 +47,8 @@ app.add_middleware(
 
 # start application
 if __name__ == '__main__':
-    uvicorn.run("main:app", host=os.getenv("HOST"), port=int(os.getenv("PORT")), reload=True)
+    pass
+    #uvicorn.run("main:app", host=os.getenv("HOST"), port=int(os.getenv("PORT")), reload=True)
 
 """
     APP ROUTES
