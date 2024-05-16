@@ -63,3 +63,9 @@ class SuggestRestaurantEntity(BaseModel):
     vendor_name : str = Field(...)
     vendor_contact_number : str = Field(...)
     vendor_contact_address : Dict = Field(...)
+
+# Save customer info
+class SaveCustomerInfoEntity(BaseModel):
+    phone : str = Field(...)
+    fullname : str = Field(...)
+    email : str = Field(...)

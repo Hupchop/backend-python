@@ -83,40 +83,43 @@ async def checkCustomerPhone(phone : str) :
     customer = await customer_collection.find_one({'phone' : phoneFormatted['phone']})
     response : dict = {}
 
-    if type(customer) == dict:
+    try: 
+        if type(customer) == dict:
 
-        if customer['date_updated']:
-            customer['date_updated'] = customer['date_updated'].isoformat()
+            if 'date_updated' in customer:
+                customer['date_updated'] = customer['date_updated'].isoformat()
 
-        del customer['_id']
-        # doesn't have a password
-        customer['hasPassword'] = False
-        
-        if customer['password']:
-            customer['hasPassword'] = True
-            del customer['password']
-
-        # all good
-        response['flag'] = 'existing'
-        response['customer'] = customer
-        response['message'] = 'Phone number verified'
-
-    else:
-
-        response = {
-            'flag' : 'new',
-            'message' : 'Phone number verified'
-        }
-
-        if not phoneFormatted['is_valid']:
+            del customer['_id']
+            # doesn't have a password
+            customer['hasPassword'] = False
             
-            return JSONResponse(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                content={
-                    'Message' : 'invalid phone number'
-                }
-            )
-        
+            if 'password' in customer:
+                customer['hasPassword'] = True
+                del customer['password']
+
+            # all good
+            response['flag'] = 'existing'
+            response['customer'] = customer
+            response['message'] = 'Phone number verified'
+
+        else:
+
+            response = {
+                'flag' : 'new',
+                'message' : 'Phone number verified'
+            }
+
+            if not phoneFormatted['is_valid']:
+                
+                return JSONResponse(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    content={
+                        'Message' : 'invalid phone number'
+                    }
+                )
+    except:
+        ...    
+    
     # all good
     return JSONResponse(
         status_code=status.HTTP_200_OK,
@@ -695,6 +698,7 @@ async def getRestaurantTypes():
     }
 
 
+# get all food inspiration
 @app.get('/food-inspiration/all', status_code=status.HTTP_200_OK)
 async def getAllFoodInspiration():
     records = await inspiration_collection.find().to_list(1000)
@@ -797,4 +801,38 @@ async def suggestFood(body : GeneralEntities.SuggestFoodEntity = Body(...)):
         "message" : "Your suggestion has been submitted successfully"
     }
 
+# Save customer information
+@app.post('/customer/save-info', status_code=status.HTTP_200_OK)
+async def saveCustomerInfo(body : GeneralEntities.SaveCustomerInfoEntity = Body(...)):
+    phoneNumber = format_number(body.phone)
+
+    if not phoneNumber['is_valid']:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={
+                "message" : "Invalid Phone number"
+            }
+        )
+    
+    try :
+        filter = {"phone": phoneNumber}
+
+        payload: dict = {
+            "fullname" : body.fullname,
+            "phone" : phoneNumber['phone'],
+            "email" : body.email,
+            "country" : "nigeria",
+        }
+
+        customer_collection.update_one(filter=filter, update={"$set": payload}, upsert=True)
+    except: 
+        ...
+
+    # all good
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={
+            "message": "Customer Created Successfully"
+        }
+    )
 ...
